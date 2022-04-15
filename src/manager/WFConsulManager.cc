@@ -22,8 +22,7 @@ using namespace protocol;
 
 int WFConsulManager::init(const std::string& proxy_url)
 {
-	ConsulConfig config;
-	return this->init(proxy_url, std::move(config));
+	return this->client.init(proxy_url);
 }
 
 int WFConsulManager::init(const std::string& proxy_url, ConsulConfig config)
@@ -46,34 +45,35 @@ int WFConsulManager::watch_service(const std::string& service_namespace,
 int WFConsulManager::watch_service(const std::string& service_namespace,
 								   const std::string& service_name,
 								   const struct AddressParams *address_params)
-{
-	if (!address_params)
-		return -1;
-
+{	
 	std::string policy_name = get_policy_name(service_namespace, service_name);
+
+	if (is_watched(policy_name))
+		return 0;
+
 	if (UpstreamManager::upstream_create_vnswrr(policy_name) != 0)
 		return -1;
-		
+
 	WFFacilities::WaitGroup wait_group(1);
-	auto discover_cb = std::bind(&WFConsulManager::discover_callback, this,
-								 std::placeholders::_1);
-	WFConsulTask *task = this->client.create_discover_task(service_namespace,
-														   service_name,
-														   2,
-														   discover_cb);
+	auto&& discover_cb = std::bind(&WFConsulManager::discover_callback, this,
+								   std::placeholders::_1);
+	WFConsulTask *task;
+	task = this->client.create_discover_task(service_namespace, service_name,
+											 this->retry_max,
+											 std::move(discover_cb));
 	task->set_consul_index(0);
 
 	struct ConsulCallBackResult result;
 	result.wait_group = &wait_group;
 	task->user_data = &result;
 
-	struct WatchContext *ctx = new struct WatchContext();
+	struct WatchContext *ctx = new struct WatchContext;
 	ctx->service_namespace = service_namespace;
 	ctx->service_name = service_name;
 	ctx->address_params = *address_params;
 
 	SeriesWork *series = Workflow::create_series_work(task,
-												[](const SeriesWork *series) {
+										[](const SeriesWork *series) {
 		delete (struct WatchContext *)series->get_context();
 	});
 
@@ -81,8 +81,11 @@ int WFConsulManager::watch_service(const std::string& service_namespace,
 	series->start();
 
 	wait_group.wait();
+	this->mutex.lock();
+	this->watch_status[policy_name]->watch_state = CONSUL_WATCHING;
+	this->mutex.unlock();
 
-	return result.error;
+	return result.error == WFT_STATE_SUCCESS ? 0 : -1;
 }
 
 int WFConsulManager::unwatch_service(const std::string& service_namespace,
@@ -91,20 +94,17 @@ int WFConsulManager::unwatch_service(const std::string& service_namespace,
 	std::string policy_name = get_policy_name(service_namespace, service_name);
 	std::unique_lock<std::mutex> lock(this->mutex);
 	auto iter = this->watch_status.find(policy_name);
-	if (iter == this->watch_status.end())
+	if (iter != this->watch_status.end())
 	{
-		lock.unlock();
-		return WFT_ERR_CONSUL_NO_WATCHING_SERVICE;	
-	}
-		
-	if (iter->second->watching)
-	{
-		iter->second->watching = false;
-		iter->second->cond.wait(lock);
-	}
+		if (iter->second->watch_state == CONSUL_WATCHING)
+		{
+			iter->second->watch_state = CONSUL_UNWATCH;
+			iter->second->cond.wait(lock);
+		}
 
-	delete iter->second;
-	this->watch_status.erase(iter);
+		delete iter->second;
+		this->watch_status.erase(iter);
+	}
 	lock.unlock();
 
 	return UpstreamManager::upstream_delete(policy_name);
@@ -112,20 +112,16 @@ int WFConsulManager::unwatch_service(const std::string& service_namespace,
 
 int WFConsulManager::register_service(const struct ConsulService *service)
 {
-	if (!service)
-		return -1;
-
 	WFFacilities::WaitGroup wait_group(1);
 
-	auto register_cb = std::bind(&WFConsulManager::register_callback, this,
-								 std::placeholders::_1);
-	WFConsulTask *task = this->client.create_register_task(
-											service->service_namespace,
-											service->service_name,
-											service->service_id,
-											2,
-											register_cb);
-
+	auto&& register_cb = std::bind(&WFConsulManager::register_callback, this,
+								   std::placeholders::_1);
+	WFConsulTask *task;
+	task = this->client.create_register_task(service->service_namespace,
+											 service->service_name,
+											 service->service_id,
+											 this->retry_max,
+											 std::move(register_cb));
 	task->set_service(service);
 
 	struct ConsulCallBackResult result;
@@ -135,7 +131,7 @@ int WFConsulManager::register_service(const struct ConsulService *service)
 
 	wait_group.wait();
 
-	return result.error;
+	return result.error == WFT_STATE_SUCCESS ? 0 : -1;
 }
 
 int WFConsulManager::deregister_service(const std::string& service_namespace,
@@ -143,11 +139,11 @@ int WFConsulManager::deregister_service(const std::string& service_namespace,
 {
 	WFFacilities::WaitGroup wait_group(1);
 
-	auto deregister_cb = std::bind(&WFConsulManager::register_callback, this,
-								   std::placeholders::_1);
+	auto&& deregister_cb = std::bind(&WFConsulManager::register_callback, this,
+									 std::placeholders::_1);
 	WFConsulTask *task = this->client.create_deregister_task(service_namespace,
 															 service_id,
-															 2,
+															 this->retry_max,
 															 deregister_cb);
 
 	struct ConsulCallBackResult result;
@@ -157,7 +153,7 @@ int WFConsulManager::deregister_service(const std::string& service_namespace,
 
 	wait_group.wait();
 
-	return result.error;
+	return result.error == WFT_STATE_SUCCESS ? 0 : -1;
 }
 
 void WFConsulManager::get_watching_services(std::vector<std::string>& services)
@@ -170,91 +166,88 @@ void WFConsulManager::get_watching_services(std::vector<std::string>& services)
 	this->mutex.unlock();
 }
 
+WFTimerTask *WFConsulManager::create_timer_task(long long consul_index)
+{
+	auto timer_cb = std::bind(&WFConsulManager::timer_callback, this,
+							  std::placeholders::_1, consul_index);
+	int ttl = 0;
+	if (!this->config.blocking_query())
+		ttl = this->config.get_wait_ttl() * 1000;
+	WFTimerTask *timer_task = WFTaskFactory::create_timer_task(ttl, timer_cb);
+	return timer_task;
+}
+
+void WFConsulManager::process_watch_info(WFConsulTask *task,
+										ConsulInstances& instances)
+{
+	struct WatchContext *ctx =
+		(struct WatchContext *)series_of(task)->get_context();
+	std::string policy_name = get_policy_name(ctx->service_namespace,
+											  ctx->service_name);
+	long long consul_index = task->get_consul_index();
+
+	struct WatchInfo *watch_info = NULL;
+	bool need_update = true;
+	bool unwatch = false;
+	this->mutex.lock();
+	auto iter = this->watch_status.find(policy_name);
+	if (iter != this->watch_status.end())
+	{
+		if (iter->second->consul_index >= consul_index)
+			need_update = false;
+
+		watch_info = iter->second;
+	}
+	else
+	{
+		watch_info = new struct WatchInfo;
+		this->watch_status[policy_name] = watch_info;
+	}
+
+	watch_info->consul_index = consul_index;
+
+	if (need_update)
+	{
+		update_upstream_and_instances(policy_name, instances,
+				&ctx->address_params, watch_info->cached_addresses);
+	}
+
+	if (watch_info->watch_state == CONSUL_UNWATCH)
+	{
+		unwatch = true;
+		watch_info->cond.notify_one();
+	}
+	this->mutex.unlock();
+
+	if (!unwatch)
+		series_of(task)->push_back(create_timer_task(consul_index));
+}
+
 void WFConsulManager::discover_callback(WFConsulTask *task)
 {
 	int state = task->get_state();
 	int error = task->get_error();
-
-	struct ConsulCallBackResult *result = NULL;
-	if (task->user_data)
-	{
-		result = (struct ConsulCallBackResult*)task->user_data;
-		result->error = error;
-	}
 
 	bool ret = false;
 	ConsulInstances instances;
 	if (state == WFT_STATE_SUCCESS)
 		ret = task->get_discover_result(instances);
 
-	if (state != WFT_STATE_SUCCESS || !ret)
-	{
-		if (result)
-		{
-			result->wait_group->done();
-			return;
-		}
-	}
-	
-	struct WatchContext *ctx =
-		(struct WatchContext *)series_of(task)->get_context();
-	std::string policy_name = get_policy_name(ctx->service_namespace,
-											  ctx->service_name);
-
-	this->mutex.lock();
-	auto iter = this->watch_status.find(policy_name);
-	if (iter != this->watch_status.end())
-	{
-		if (result)
-		{
-			result->error = WFT_ERR_CONSUL_DOUBLE_WATCH;
-			result->wait_group->done();
-			this->mutex.unlock();
-			return; 
-		}
-
-		if (!iter->second->watching)
-		{
-			iter->second->cond.notify_one();
-			this->mutex.unlock();
-			return;
-		}
-			
-		ret = ret && (iter->second->consul_index < task->get_consul_index());
-	}
-	else
-	{
-		struct WatchInfo *watch_info = new struct WatchInfo();
-		this->watch_status[policy_name] = watch_info;
-	}
-
-	auto& watch_info = this->watch_status[policy_name];
-	watch_info->consul_index = task->get_consul_index();
-	
-	if (result)
-		watch_info->watching = true;
-
 	if (ret)
 	{
-		update_upstream_and_instances(policy_name,
-									  instances,
-									  &ctx->address_params,
-									  watch_info->cached_addresses);
+		process_watch_info(task, instances);
 	}
 
-	this->mutex.unlock();
+	if (task->user_data)
+	{
+		struct ConsulCallBackResult *result = NULL;
+		result = (struct ConsulCallBackResult*)task->user_data;
+		result->error = error;
+		if (result->error == 0 && !ret)
+			result->error = -1;
 
-	auto timer_cb = std::bind(&WFConsulManager::timer_callback, this,
-							  std::placeholders::_1, watch_info->consul_index);
-	int ttl = 
-		this->config.blocking_query() ? 0 : this->config.get_wait_ttl() * 1000;
-	WFTimerTask *timer_task = WFTaskFactory::create_timer_task(ttl, timer_cb);
-
-	series_of(task)->push_back(timer_task);
-
-	if (result)
 		result->wait_group->done();
-
+	}
 }
 
 void WFConsulManager::timer_callback(WFTimerTask *task, long long consul_index)
@@ -262,12 +255,12 @@ void WFConsulManager::timer_callback(WFTimerTask *task, long long consul_index)
 	struct WatchContext *ctx =
 		(struct WatchContext *)series_of(task)->get_context();
 
-	auto discover_cb = std::bind(&WFConsulManager::discover_callback, this,
+	auto&& discover_cb = std::bind(&WFConsulManager::discover_callback, this,
 								 std::placeholders::_1);
 	WFConsulTask *discover_task;
 	discover_task = this->client.create_discover_task(ctx->service_namespace,
 													  ctx->service_name,
-													  2,
+													  this->retry_max,
 													  discover_cb);
 	discover_task->set_consul_index(consul_index);
 	series_of(task)->push_back(discover_task);
@@ -356,4 +349,15 @@ int WFConsulManager::remove_servers(const std::string& policy_name,
 	}
 
 	return 0;
+}
+
+bool WFConsulManager::is_watched(const std::string& policy_name)
+{
+	bool watched = false;
+	this->mutex.lock();
+	auto iter = this->watch_status.find(policy_name);
+	if (iter != this->watch_status.end())
+		watched = true;	
+	this->mutex.unlock();
+	return watched;
 }

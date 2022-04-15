@@ -16,20 +16,19 @@
   Authors: Wang Zhenpeng (wangzhenpeng@sogou-inc.com)
 */
 
-#ifndef _WFConsulManager_H_
-#define _WFConsulManager_H_
+#ifndef _WFCONSULMANAGER_H_
+#define _WFCONSULMANAGER_H_ 
 
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
 #include <functional>
 #include <condition_variable>
-#include <unordered_map>
 #include <unordered_set>
 #include "WFTask.h"
 #include "WFTaskFactory.h"
 #include "WFFacilities.h"
-#include "UpstreamPolicies.h"
 #include "UpstreamManager.h"
 #include "WFConsulClient.h"
 #include "ConsulDataTypes.h"
@@ -103,6 +102,7 @@ public:
 	void get_watching_services(std::vector<std::string>& services);
 
 public:
+	WFConsulManager() : retry_max(2) { }
 	virtual ~WFConsulManager() { }
 
 private:
@@ -124,15 +124,29 @@ private:
 					const struct AddressParams *address_params);
 	int remove_servers(const std::string& policy_name,
 					   const std::vector<std::string>& addresses);
+	WFTimerTask *create_timer_task(long long consul_index);
+	bool is_watched(const std::string& policy_name);
+	struct WatchContext;
+	void process_watch_info(WFConsulTask *task,
+							ConsulInstances& instances);
+
 private:
 	std::string proxy_url;
 	protocol::ConsulConfig config;
 	WFConsulClient client;
 	std::mutex mutex;
+	int retry_max;
 
+private:
+	enum
+	{
+		CONSUL_UNINITED = 0,
+		CONSUL_WATCHING = 1,	
+		CONSUL_UNWATCH = 2,
+	};
 	struct WatchInfo
 	{
-		bool watching;
+		int watch_state;
 		long long consul_index;
 		std::condition_variable cond;
 		std::unordered_set<std::string> cached_addresses;
@@ -150,7 +164,7 @@ private:
 		std::string service_name;
 		struct AddressParams address_params;
 	};
-	std::unordered_map<std::string, struct WatchInfo *> watch_status;
+	std::map<std::string, struct WatchInfo *> watch_status;
 };
 
 #endif

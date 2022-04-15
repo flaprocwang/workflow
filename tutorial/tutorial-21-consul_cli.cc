@@ -142,7 +142,7 @@ int main(int argc, char *argv[])
 		cm.get_watching_services(services);
 		print_services_result(services);		
 
-		const int times = 200;
+		const int times = 500;
 		WFFacilities::WaitGroup wait_group(times);
 		auto cb = [&wait_group](WFHttpTask *task) {
 			const void *body;
@@ -169,6 +169,7 @@ int main(int argc, char *argv[])
 														   5, /* RETRY_MAX */
 														   cb);
 			task->start();
+			usleep(100000);
 		}
 		wait_group.wait();
 
