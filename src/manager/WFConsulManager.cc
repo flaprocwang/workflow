@@ -45,7 +45,7 @@ int WFConsulManager::watch_service(const std::string& service_namespace,
 int WFConsulManager::watch_service(const std::string& service_namespace,
 								   const std::string& service_name,
 								   const struct AddressParams *address_params)
-{	
+{
 	std::string policy_name = get_policy_name(service_namespace, service_name);
 
 	if (is_watched(policy_name))
@@ -285,7 +285,7 @@ int WFConsulManager::update_upstream_and_instances(
 {
 	std::vector<std::string> add_addresses, remove_addresses;
 	std::unordered_set<std::string> cur_address_set;
-	std::string	address;
+	std::string address;
 	for (const auto& instance : instances)
 	{
 		address = get_address(instance.service.service_address.first,
@@ -357,7 +357,7 @@ bool WFConsulManager::is_watched(const std::string& policy_name)
 	this->mutex.lock();
 	auto iter = this->watch_status.find(policy_name);
 	if (iter != this->watch_status.end())
-		watched = true;	
+		watched = true;
 	this->mutex.unlock();
 	return watched;
 }

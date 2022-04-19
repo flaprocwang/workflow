@@ -17,7 +17,7 @@
 */
 
 #ifndef _WFCONSULMANAGER_H_
-#define _WFCONSULMANAGER_H_ 
+#define _WFCONSULMANAGER_H_
 
 #include <map>
 #include <mutex>
@@ -41,15 +41,15 @@ public:
 	void deinit();
 
 	/**
-     * @brief      watch service
-     * @param[in]  service_namespace  consul service namespace
-     * @param[in]  service_name       consul service name
-     * @retval     success/fail
-     * @retval     0                  success
-     * @retval     -1                 fail, more info see errno
-     * @note       
-     * service_namespace: if consul not enterprise, you must set it empty string
-     */
+	 * @brief      watch service
+	 * @param[in]  service_namespace  consul service namespace
+	 * @param[in]  service_name       consul service name
+	 * @retval     success/fail
+	 * @retval     0                  success
+	 * @retval     -1                 fail, more info see errno
+	 * @note
+	 * service_namespace: if consul not enterprise, you must set it empty string
+	 */
 	int watch_service(const std::string& service_namespace,
 					  const std::string& service_name);
 	int watch_service(const std::string& service_namespace,
@@ -57,48 +57,48 @@ public:
 					  const struct AddressParams *address_params);
 
 	/**
-     * @brief      unwatch service
-     * @param[in]  service_namespace  consul service namespace
-     * @param[in]  service_name       consul service name
-     * @retval     success/fail
-     * @retval     0                  success
-     * @retval     -1                 fail, more info see errno
-     * @note       
-     * service_namespace: if consul not enterprise, you must set it empty string
-     */
+	 * @brief      unwatch service
+	 * @param[in]  service_namespace  consul service namespace
+	 * @param[in]  service_name       consul service name
+	 * @retval     success/fai
+	 * @retval     0                  success
+	 * @retval     -1                 fail, more info see errno
+	 * @note
+	 * service_namespace: if consul not enterprise, you must set it empty string
+	 */
 	int unwatch_service(const std::string& service_namespace,
 						const std::string& service_name);
 
 	/**
-     * @brief      register service
-     * @param[in]  service            consul service
-     * @retval     success/fail
-     * @retval     0                  success
-     * @retval     -1                 fail, more info see errno
-     * @note       
-     * service_namespace: if consul not enterprise, you must set it empty string
-     * service_id: it must be globally unique
-     */
+	 * @brief      register service
+	 * @param[in]  service            consul service
+	 * @retval     success/fail
+	 * @retval     0                  success
+	 * @retval     -1                 fail, more info see errno
+	 * @note
+	 * service_namespace: if consul not enterprise, you must set it empty string
+	 * service_id: it must be globally unique
+	 */
 	int register_service(const struct protocol::ConsulService *service);
 
 	/**
-     * @brief      deregister service
-     * @param[in]  service_namespace  consul service namespace
-     * @param[in]  service_id         consul service id
-     * @retval     success/fail
-     * @retval     0                  success
-     * @retval     -1                 fail, more info see errno
-     * @note       
-     * service_namespace: if consul not enterprise, you must set it empty string
-     * service_id: it must be globally unique
-     */
+	 * @brief      deregister service
+	 * @param[in]  service_namespace  consul service namespace
+	 * @param[in]  service_id         consul service id
+	 * @retval     success/fail
+	 * @retval     0                  success
+	 * @retval     -1                 fail, more info see errno
+	 * @note
+	 * service_namespace: if consul not enterprise, you must set it empty string
+	 * service_id: it must be globally unique
+	 */
 	int deregister_service(const std::string& service_namespace,
 						   const std::string& service_id);
 
 	/**
-     * @brief      get all watch services
-     * @param[out] service names
-     */
+	 * @brief      get all watch services
+	 * @param[out] service names
+	 */
 	void get_watching_services(std::vector<std::string>& services);
 
 public:
@@ -107,18 +107,18 @@ public:
 
 private:
 	using ConsulInstances = std::vector<struct protocol::ConsulServiceInstance>;
-    void discover_callback(WFConsulTask *task);
-    void register_callback(WFConsulTask *task);
-    void deregister_callback(WFConsulTask *task);
-    void timer_callback(WFTimerTask *task, long long consul_index);
-    int update_upstream_and_instances(
+	void discover_callback(WFConsulTask *task);
+	void register_callback(WFConsulTask *task);
+	void deregister_callback(WFConsulTask *task);
+	void timer_callback(WFTimerTask *task, long long consul_index);
+	int update_upstream_and_instances(
 							const std::string& policy_name,
 							const ConsulInstances& instances,
 							const struct AddressParams *address_params,
 							std::unordered_set<std::string>& cached_addresses);
-    std::string get_policy_name(const std::string& service_namespace,
+	std::string get_policy_name(const std::string& service_namespace,
 								const std::string& service_name);
-    std::string get_address(const std::string& ip, unsigned short port);
+	std::string get_address(const std::string& ip, unsigned short port);
 	int add_servers(const std::string& policy_name,
 					const std::vector<std::string>& addresses,
 					const struct AddressParams *address_params);
@@ -141,7 +141,7 @@ private:
 	enum
 	{
 		CONSUL_UNINITED = 0,
-		CONSUL_WATCHING = 1,	
+		CONSUL_WATCHING = 1,
 		CONSUL_UNWATCH = 2,
 	};
 	struct WatchInfo
@@ -150,7 +150,7 @@ private:
 		long long consul_index;
 		std::condition_variable cond;
 		std::unordered_set<std::string> cached_addresses;
-    };
+	};
 
 	struct ConsulCallBackResult
 	{
